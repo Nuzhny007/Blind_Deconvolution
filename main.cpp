@@ -5,11 +5,10 @@
     @version 1.0 May/17/2018
 */
 #include <iostream>
-#include <opencv2/opencv.hpp>
 #include <ctime>
 
-using namespace cv;
-using namespace std;
+#include <opencv2/opencv.hpp>
+#include <opencv2/core/ocl.hpp>
 
 int channel;
 double LAMBDA;
@@ -44,45 +43,85 @@ struct input {
 };
 
 struct output{
-    vector<cv::Mat> fp;
-    vector<double> Mp, Np, MKp, NKp, lambdas;
+    std::vector<cv::Mat> fp;
+    std::vector<double> Mp, Np, MKp, NKp, lambdas;
     int  scales;
 } ;
 
 enum ConvolutionType {
-            CONVOLUTION_FULL,
-            CONVOLUTION_VALID
+    CONVOLUTION_FULL,
+    CONVOLUTION_VALID
+};
+
+///
+/// \brief The FuncTimer class
+///
+class FuncTimer
+{
+public:
+    FuncTimer(const std::string& name)
+        : m_name(name)
+    {
+        m_startTime = std::chrono::high_resolution_clock::now();
+        m_lastPointTime = m_startTime;
+    }
+
+    ~FuncTimer()
+    {
+        auto stopTime = std::chrono::high_resolution_clock::now();
+        auto workTime = std::chrono::duration_cast<std::chrono::milliseconds>(stopTime - m_startTime);
+        std::cout << "[-" << m_name << "-] work time = " << workTime.count() << " ms\n";
+    }
+
+    void SetPoint()
+    {
+        ++m_pointsCount;
+        auto pointTime = std::chrono::high_resolution_clock::now();
+        auto workTime = std::chrono::duration_cast<std::chrono::milliseconds>(pointTime - m_lastPointTime);
+        std::cout << "[-" << m_name << "-] point " << m_pointsCount << " time = " << workTime.count() << " ms\n";
+
+        m_lastPointTime = pointTime;
+    }
+
+private:
+    std::chrono::high_resolution_clock::time_point m_startTime;
+    std::chrono::high_resolution_clock::time_point m_lastPointTime;
+    std::string m_name;
+    size_t m_pointsCount = 0;
 };
 
 /**********************************************************************************************
  * @param img The input img, Kernel The input kernel, type FULL or VALID, dest The output result
  * Compute conv2 by calling filter2D.
  ************************************************************************************************/
-void conv2(  const cv::Mat &img,   const cv::Mat& kernel, ConvolutionType type, cv::Mat& dest) {
-    Mat flipped_kernel;
-    flip( kernel, flipped_kernel, -1 );
+void conv2(  const cv::Mat &img,   const cv::Mat& kernel, ConvolutionType type, cv::Mat& dest)
+{
+    //FuncTimer funcTimer("conv2");
 
-    Point2i pad;
-    Mat padded, padded2;
+    cv::Mat flipped_kernel;
+    cv::flip( kernel, flipped_kernel, -1 );
+
+    cv::Point2i pad;
+    cv::Mat padded, padded2;
 
     switch( type ) {
-        case CONVOLUTION_VALID:
-            padded = img;
-            pad = Point2i( kernel.cols - 1, kernel.rows - 1);
-            break;
+    case CONVOLUTION_VALID:
+        padded = img;
+        pad = cv::Point2i( kernel.cols - 1, kernel.rows - 1);
+        break;
 
-        case CONVOLUTION_FULL:
-            pad = Point2i( kernel.cols - 1, kernel.rows - 1);
-            padded.create(img.rows + 2*(kernel.rows - 1), img.cols + 2*(kernel.cols - 1), img.type());
-            padded.setTo(cv::Scalar::all(0));
-            img.copyTo(padded(Rect((kernel.rows - 1), (kernel.cols - 1), img.cols, img.rows)));
-            break;
+    case CONVOLUTION_FULL:
+        pad = cv::Point2i( kernel.cols - 1, kernel.rows - 1);
+        padded.create(img.rows + 2*(kernel.rows - 1), img.cols + 2*(kernel.cols - 1), img.type());
+        padded.setTo(cv::Scalar::all(0));
+        img.copyTo(padded(cv::Rect((kernel.rows - 1), (kernel.cols - 1), img.cols, img.rows)));
+        break;
 
-        default:
-            throw runtime_error("Unsupported convolutional shape");
+    default:
+        throw std::runtime_error("Unsupported convolutional shape");
     }
-    Rect region = Rect( pad.x / 2, pad.y / 2, padded.cols - pad.x, padded.rows - pad.y);
-    filter2D( padded, dest , -1, flipped_kernel, Point(-1, -1), 0, BORDER_CONSTANT );
+    cv::Rect region( pad.x / 2, pad.y / 2, padded.cols - pad.x, padded.rows - pad.y);
+    cv::filter2D( padded, dest , -1, flipped_kernel, cv::Point(-1, -1), 0, cv::BORDER_CONSTANT );
 
     dest = dest( region );
 }
@@ -92,7 +131,10 @@ void conv2(  const cv::Mat &img,   const cv::Mat& kernel, ConvolutionType type, 
  * Calc total variation for image f
  *
  **********************************************************************************/
-void gradTVcc(const cv::Mat &f, cv::Mat &dest){
+void gradTVcc(const cv::Mat &f, cv::Mat &dest)
+{
+    //FuncTimer funcTimer("gradTVcc");
+
     cv::Mat fxforw(f.size(), f.type());
     f(cv::Range(1,f.rows),cv::Range(0,f.cols)).copyTo(fxforw);
     cv::copyMakeBorder(fxforw, fxforw,0, 1, 0, 0, cv::BORDER_REPLICATE  );
@@ -124,8 +166,8 @@ void gradTVcc(const cv::Mat &f, cv::Mat &dest){
     fxback = f - fxback;
 
     dest = cv::Mat::zeros(f.size(), CV_64FC3);
-    vector<cv::Mat> pdest;
-    vector<cv::Mat> pfxforw, pfyforw, pfxback, pfyback, pfxmixd, pfymixd;
+    std::vector<cv::Mat> pdest;
+    std::vector<cv::Mat> pfxforw, pfyforw, pfxback, pfyback, pfxmixd, pfymixd;
     cv::split(fxforw, pfxforw);
     cv::split(fyforw, pfyforw);
     cv::split(fxback, pfxback);
@@ -175,7 +217,7 @@ void gradTVcc(const cv::Mat &f, cv::Mat &dest){
         c++;
     }
     if (c == 1){
-        Mat t[] = {pdest[0], pdest[0], pdest[0]};
+        cv::Mat t[] = {pdest[0], pdest[0], pdest[0]};
         cv::merge(t, 3, dest);
     }else {
         cv::merge(pdest, dest);
@@ -189,7 +231,10 @@ void gradTVcc(const cv::Mat &f, cv::Mat &dest){
  * Initialize gradu and gradk
  * Loop for niters times, call conv2 and gradTVCC to get the result of u and k.
  **********************************************************************************/
-void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct params_t params ) {
+void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct params_t params )
+{
+    FuncTimer funcTimer("prida");
+
     cv::Mat gradu = cv::Mat::zeros(cv::Size(f.cols + (int) params.NK - 1,
                                             f.rows + (int) params.MK - 1), CV_64FC3);
     cv::Mat gradk = cv::Mat::zeros(k.size(), CV_64F);
@@ -199,7 +244,7 @@ void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct param
                                         f.rows + (int) params.MK - 1), CV_64FC3);
         int c = 0;
         if (channel == 1){
-            vector<cv::Mat> pGradu, pf, pu;
+            std::vector<cv::Mat> pGradu, pf, pu;
             cv::split(gradu, pGradu);
             cv::split(f, pf);
             cv::split(u, pu);
@@ -212,10 +257,10 @@ void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct param
             cv::rotate(k,rotk, cv::ROTATE_180);
 
             conv2(tmp , rotk, CONVOLUTION_FULL,pGradu[c]);
-            Mat t[] = {pGradu[c], pGradu[c], pGradu[c]};
+            cv::Mat t[] = {pGradu[c], pGradu[c], pGradu[c]};
             cv::merge(t, 3, gradu);
         }else if(channel == 3){
-            vector<cv::Mat> pGradu, pf, pu;
+            std::vector<cv::Mat> pGradu, pf, pu;
             cv::split(gradu, pGradu);
             cv::split(f, pf);
             cv::split(u, pu);
@@ -244,12 +289,12 @@ void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct param
         double maxValgu;
         cv::minMaxLoc(cv::abs(gradu), &minValgu, &maxValgu);
 
-        double sf = 1e-3 * maxValu / max(1e-31, maxValgu);
+        double sf = 1e-3 * maxValu / std::max(1e-31, maxValgu);
         cv::Mat u_new;
         u_new   = u - sf*gradu;
         gradk = cv::Mat::zeros(gradk.size(), CV_64FC1);
 
-        vector<cv::Mat>  pff, puu;
+        std::vector<cv::Mat>  pff, puu;
         cv::split(f, pff);
         cv::split(u, puu);
 
@@ -271,7 +316,7 @@ void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct param
         double minValgk, maxValgk;
         cv::minMaxLoc(cv::abs(gradk), &minValgk, &maxValgk);
 
-        double sh = 1e-3 * maxValk / max(1e-31, maxValgk);
+        double sh = 1e-3 * maxValk / std::max(1e-31, maxValgk);
         double eps = DBL_EPSILON;
         cv::Mat etai = sh / (k + eps);
 
@@ -294,7 +339,9 @@ void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct param
  * @param data Including input image, kernel size, lambda, lambdaMultiplier, scaleMultiplier and largestLambda
  *        answer The dest struct stores all the result
  ****************************************************************************************************************/
-struct output buildPyramid(struct input &data, struct output &answer){
+struct output buildPyramid(struct input &data, struct output &answer)
+{
+    FuncTimer funcTimer("buildPyramid");
 
     double smallestScale = 3;
     int scales = 1;
@@ -308,7 +355,7 @@ struct output buildPyramid(struct input &data, struct output &answer){
     int N = s.width;
 
     while (mkpnext > smallestScale && nkpnext > smallestScale && lamnext * data.lambdaMultiplier
-                                                                 < data.largestLambda) {
+           < data.largestLambda) {
         scales = scales + 1;
         double lamprev = lamnext;
         double mkpprev = mkpnext;
@@ -346,7 +393,7 @@ struct output buildPyramid(struct input &data, struct output &answer){
     answer.NKp.resize(scales);
     answer.lambdas.resize(scales);
 
-//set the first (finest level) of pyramid to original data
+    //set the first (finest level) of pyramid to original data
     answer.fp[0] = data.f;
     answer.Mp[0] = M;
     answer.Np[0] = N;
@@ -408,7 +455,10 @@ struct output buildPyramid(struct input &data, struct output &answer){
  * Call buildPyrmaid
  * For each layer in the pyrmaid, call Prida
  **********************************************************************************************/
-void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t params, struct uk_t &uk ){
+void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t params, struct uk_t &uk )
+{
+    FuncTimer funcTimer("coarseToFine");
+
     double MK = blind_params.MK;
     double NK = blind_params.NK;
 
@@ -417,8 +467,12 @@ void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t p
     int left = (int )floor(NK/2);
     cv::copyMakeBorder(f, u,top, top, left, left, cv::BORDER_REPLICATE  );
 
+    funcTimer.SetPoint();
+
     cv::Mat k = cv::Mat::ones(cv::Size((int)MK,(int)NK),CV_64F);
     k = k/MK/NK;
+
+    funcTimer.SetPoint();
 
     struct input data;
     struct output answer;
@@ -430,6 +484,8 @@ void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t p
     data.largestLambda = params.maxLambda;
     data.f = f;
     buildPyramid(data , answer);
+
+    funcTimer.SetPoint();
 
     for (int i = answer.scales-1; i >=0; i--){
         double Ms, Ns, MKs, NKs, lambda;
@@ -451,7 +507,8 @@ void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t p
         blind_params.NK = NKs;
 
         prida(fs, u, k, lambda, blind_params);
-        cout<< "Working on Scale: " << i+1 <<  " with lambda = "<< data.lambda <<" with pyramid_lambda = " << lambda << " and Kernel size " << MKs << endl;
+        std::cout<< "Working on Scale: " << i+1 <<  " with lambda = "<< data.lambda <<" with pyramid_lambda = " << lambda << " and Kernel size " << MKs << std::endl;
+        funcTimer.SetPoint();
     }
     uk.u = u;
     uk.k = k;
@@ -465,8 +522,12 @@ void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t p
  * Initialize parameters
  * Call coarseToFine
  *********************************************************************************************/
-void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_t &uk ){
+void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_t &uk )
+{
+    FuncTimer funcTimer("blind_deconv");
+
     f.convertTo( f, CV_64F, 1./255. );
+    funcTimer.SetPoint();
     cv:: Mat f3;
     int rpad = 0;
     int cpad = 0;
@@ -476,12 +537,23 @@ void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_
     if(fmod(f.cols,2) == 0){
         cpad = 1;
     }
+
+    funcTimer.SetPoint();
+
     f(cv::Range(0,f.rows-rpad),cv::Range(0,f.cols-cpad) ).copyTo(f3);
+
+
+    funcTimer.SetPoint();
+
     struct ctf_params_t ctf_params;
     ctf_params.lambdaMultiplier = 1.9;
     ctf_params.maxLambda = 1.1e-1;
     ctf_params.finalLambda = lambda;
     ctf_params.kernelSizeMultiplier = 1.1;
+
+    funcTimer.SetPoint();
+
+
     coarseToFine(f3, params, ctf_params, uk);
 }
 
@@ -490,15 +562,18 @@ void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_
  *Check the color channel.
  *
  ***********************************************/
-bool isGrayImage( Mat img ){
-    Mat dst;
-    Mat bgr[3];
-    split( img, bgr );
-    absdiff( bgr[0], bgr[1], dst );
-    if(countNonZero( dst ))
+bool isGrayImage( cv::Mat img )
+{
+    FuncTimer funcTimer("isGrayImage");
+
+    cv::Mat dst;
+    cv::Mat bgr[3];
+    cv::split( img, bgr );
+    cv::absdiff( bgr[0], bgr[1], dst );
+    if(cv::countNonZero( dst ))
         return false;
-    absdiff( bgr[0], bgr[2], dst );
-    return !countNonZero( dst );
+    cv::absdiff( bgr[0], bgr[2], dst );
+    return !cv::countNonZero( dst );
 }
 
 /***********************************************
@@ -509,7 +584,10 @@ bool isGrayImage( Mat img ){
  * Write out the results to the folder
  *
  ***********************************************/
-void helper(cv::Mat image ){
+void helper(cv::Mat image )
+{
+    FuncTimer funcTimer("helper");
+
     struct uk_t uk;
     struct params_t params;
 
@@ -517,26 +595,35 @@ void helper(cv::Mat image ){
     params.NK = KERNEL_SIZE; // col
     params.niters = 1000;
 
+    funcTimer.SetPoint();
+
     blind_deconv(image, LAMBDA, params,uk);
     std::ostringstream name;
+
+    funcTimer.SetPoint();
 
     PATH[strlen(PATH) - 4] = '\0';
     name << PATH << "recov.png";
     std::ostringstream kname;
     kname << PATH << "recovkernel.png";
 
+    funcTimer.SetPoint();
+
     cv::Mat tmpk, tmpu;
     uk.u.convertTo(tmpu,CV_8U, 1.*255.);
     double ksml, klag;
     cv::minMaxLoc(uk.k,&ksml, &klag);
 
+    funcTimer.SetPoint();
+
     tmpk = uk.k / klag;
     uk.k.convertTo(tmpk,CV_8U, 1.*255.);
-    cv::applyColorMap( tmpk, tmpk, COLORMAP_BONE);
+    cv::applyColorMap( tmpk, tmpk, cv::COLORMAP_BONE);
     cv::imwrite( name.str(), tmpu);
     cv::imwrite( kname.str(),  tmpk );
-}
 
+    funcTimer.SetPoint();
+}
 
 /***********************************************
  *  Load the Image
@@ -544,24 +631,42 @@ void helper(cv::Mat image ){
  *  Determine channel number
  *  Call threadhelp
  ***********************************************/
-int main(int argc, char* argv[]) {
-    if(argc < 4) {
+int main(int argc, char* argv[])
+{
+    //bool useOCL = true;
+    //cv::ocl::setUseOpenCL(useOCL);
+    //std::cout << (cv::ocl::useOpenCL() ? "OpenCL is enabled" : "OpenCL not used") << std::endl;
+
+
+    if(argc < 4)
+    {
         printf("usage: deblur IMAGE_PATH LAMBDA KERNEL_SIZE");
         exit(1);
     }
+
+    PATH = argv[1];
+    cv::Mat image = cv::imread(PATH);
+    if (image.empty())
+    {
+        std::cerr << "Image " << PATH << " is empty" << std::endl;
+        return 1;
+    }
+
     LAMBDA = atof(argv[2]);
     KERNEL_SIZE = atof(argv[3]);
-    PATH = argv[1];
 
-    cv::Mat image = cv::imread(PATH);
 
-    if(isGrayImage(image)){
+    if(isGrayImage(image))
+    {
         channel = 1;
-        cout<<"The image is gray" <<endl;
-    }else{
+        std::cout<<"The image is gray" <<std::endl;
+    }
+    else
+    {
         channel = 3;
-        cout <<"The image is color " <<endl;
+        std::cout <<"The image is color " <<std::endl;
     }
     helper(image);
+
     return 0;
 }
