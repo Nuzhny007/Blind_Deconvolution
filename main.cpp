@@ -94,7 +94,7 @@ private:
  * @param img The input img, Kernel The input kernel, type FULL or VALID, dest The output result
  * Compute conv2 by calling filter2D.
  ************************************************************************************************/
-void conv2(  const cv::Mat &img,   const cv::Mat& kernel, ConvolutionType type, cv::Mat& dest)
+void conv2(  const cv::Mat &img, const cv::Mat& kernel, ConvolutionType type, cv::Mat& dest)
 {
     //FuncTimer funcTimer("conv2");
 
@@ -102,7 +102,7 @@ void conv2(  const cv::Mat &img,   const cv::Mat& kernel, ConvolutionType type, 
     cv::flip( kernel, flipped_kernel, -1 );
 
     cv::Point2i pad;
-    cv::Mat padded, padded2;
+    cv::Mat padded;
 
     switch( type ) {
     case CONVOLUTION_VALID:
@@ -176,9 +176,8 @@ void gradTVcc(const cv::Mat &f, cv::Mat &dest)
     cv::split(fymixd, pfymixd);
     cv::split(dest, pdest);
 
-    int c = 0;
-    while (c < channel) {
-
+    for (int c = 0; c < channel; ++c)
+    {
         cv:: Mat powfx;
         cv::pow(pfxforw[c],2,powfx);
         cv:: Mat powfy;
@@ -213,10 +212,8 @@ void gradTVcc(const cv::Mat &f, cv::Mat &dest)
         pdest[c] = (pfxforw[c] + pfyforw[c]) / max1;
         pdest[c] = pdest[c] - pfxback[c]  /  max2;
         pdest[c] = pdest[c] - pfyback[c] / max3;
-
-        c++;
     }
-    if (c == 1){
+    if (channel == 1){
         cv::Mat t[] = {pdest[0], pdest[0], pdest[0]};
         cv::merge(t, 3, dest);
     }else {
@@ -239,99 +236,89 @@ void prida(cv::Mat &f, cv::Mat &u, cv::Mat &k, const double lambda, struct param
                                             f.rows + (int) params.MK - 1), CV_64FC3);
     cv::Mat gradk = cv::Mat::zeros(k.size(), CV_64F);
 
-    for (int i = 0; i < params.niters; i++) {
+    std::vector<cv::Mat> pGradu, pf, pu;
+    cv::Mat tmp;
+    cv::Mat u_new;
+    cv::Mat MDS;
+    cv::Mat expTmp;
+    std::vector<cv::Mat> pff, puu;
+    cv::Mat subconv2;
+    cv::Mat rotu;
+    cv::Mat majconv2;
+    cv::Mat gradTV;
+    cv::Mat rotk = cv::Mat::zeros(k.size(), CV_64F);
+
+    for (int i = 0; i < params.niters; i++)
+    {
         gradu = cv::Mat::zeros(cv::Size(f.cols + (int) params.NK - 1,
                                         f.rows + (int) params.MK - 1), CV_64FC3);
-        int c = 0;
-        if (channel == 1){
-            std::vector<cv::Mat> pGradu, pf, pu;
-            cv::split(gradu, pGradu);
-            cv::split(f, pf);
-            cv::split(u, pu);
 
-            cv:: Mat tmp;
+        cv::split(gradu, pGradu);
+        cv::split(f, pf);
+        cv::split(u, pu);
+
+        for (int c = 0; c < channel; ++c)
+        {
             conv2(pu[c], k, CONVOLUTION_VALID,tmp);
             tmp = tmp - pf[c];
-
-            cv::Mat rotk = cv::Mat::zeros(k.size(), CV_64F);
             cv::rotate(k,rotk, cv::ROTATE_180);
-
             conv2(tmp , rotk, CONVOLUTION_FULL,pGradu[c]);
-            cv::Mat t[] = {pGradu[c], pGradu[c], pGradu[c]};
+        }
+
+        if (channel == 1)
+        {
+            cv::Mat t[] = {pGradu[0], pGradu[0], pGradu[0]};
             cv::merge(t, 3, gradu);
-        }else if(channel == 3){
-            std::vector<cv::Mat> pGradu, pf, pu;
-            cv::split(gradu, pGradu);
-            cv::split(f, pf);
-            cv::split(u, pu);
-            while (c < 3) {
-                cv:: Mat tmp;
-                conv2(pu[c], k, CONVOLUTION_VALID,tmp);
-                tmp = tmp - pf[c];
-                cv::Mat rotk = cv::Mat::zeros(k.size(), CV_64F);
-                cv::rotate(k,rotk, cv::ROTATE_180);
-                conv2(tmp , rotk, CONVOLUTION_FULL,pGradu[c]);
-                c++;
-            }
+        }
+        else if(channel == 3)
+        {
             cv::merge(pGradu, gradu);
         }
-        c = 0;
 
-        cv::Mat gradTV = cv::Mat::zeros(u.size(), CV_64F);
         gradTVcc(u, gradTV);
         gradu = (gradu - lambda*gradTV);
 
-        double minValu;
         double maxValu;
-        cv::minMaxLoc(u, &minValu, &maxValu);
+        cv::minMaxLoc(u, nullptr, &maxValu);
 
-        double minValgu;
         double maxValgu;
-        cv::minMaxLoc(cv::abs(gradu), &minValgu, &maxValgu);
+        cv::minMaxLoc(cv::abs(gradu), nullptr, &maxValgu);
 
         double sf = 1e-3 * maxValu / std::max(1e-31, maxValgu);
-        cv::Mat u_new;
-        u_new   = u - sf*gradu;
-        gradk = cv::Mat::zeros(gradk.size(), CV_64FC1);
+        u_new = u - sf * gradu;
+        gradk.setTo(0);
 
-        std::vector<cv::Mat>  pff, puu;
         cv::split(f, pff);
         cv::split(u, puu);
 
-        while (c < channel) {
-            cv::Mat subconv2;
+        for (int c = 0; c < channel; ++c)
+        {
             conv2(puu[c], k, CONVOLUTION_VALID, subconv2);
             subconv2 = subconv2 - pff[c];
 
-            cv::Mat rotu;
             cv::rotate(puu[c],rotu, cv::ROTATE_180);
 
-            cv::Mat majconv2;
             conv2(rotu, subconv2, CONVOLUTION_VALID, majconv2);
             gradk = gradk + majconv2;
-            c++;
         }
-        double minValk,  maxValk;
-        cv::minMaxLoc(k, &minValk, &maxValk);
-        double minValgk, maxValgk;
-        cv::minMaxLoc(cv::abs(gradk), &minValgk, &maxValgk);
+
+        double maxValk;
+        cv::minMaxLoc(k, nullptr, &maxValk);
+        double maxValgk;
+        cv::minMaxLoc(cv::abs(gradk), nullptr, &maxValgk);
 
         double sh = 1e-3 * maxValk / std::max(1e-31, maxValgk);
         double eps = DBL_EPSILON;
         cv::Mat etai = sh / (k + eps);
 
         int bigM = 1000;
-        cv::Mat expTmp;
         cv::exp((-etai).mul(gradk), expTmp);
 
         cv::Mat tmp2 = cv::min(expTmp, bigM);
-        cv::Mat MDS;
         MDS = k.mul(tmp2);
 
-        cv::Mat k_new = MDS/cv::sum(MDS)[0];
-
+        k = MDS/cv::sum(MDS)[0];
         u = u_new;
-        k = k_new;
     }
 }
 
@@ -354,8 +341,10 @@ struct output buildPyramid(struct input &data, struct output &answer)
     int M = s.height;
     int N = s.width;
 
-    while (mkpnext > smallestScale && nkpnext > smallestScale && lamnext * data.lambdaMultiplier
-           < data.largestLambda) {
+    while (mkpnext > smallestScale
+           && nkpnext > smallestScale
+           && lamnext * data.lambdaMultiplier < data.largestLambda)
+    {
         scales = scales + 1;
         double lamprev = lamnext;
         double mkpprev = mkpnext;
@@ -402,7 +391,8 @@ struct output buildPyramid(struct input &data, struct output &answer)
     answer.lambdas[0] = data.lambda;
 
     //loop and fill the rest of the pyramid
-    for (int s = 1 ; s <scales; s++){
+    for (int s = 1 ; s <scales; s++)
+    {
         answer.lambdas[s] = answer.lambdas[s - 1] * data.lambdaMultiplier;
 
         answer.MKp[s] = round(answer.MKp[s - 1] / data.scaleMultiplier);
@@ -441,7 +431,7 @@ struct output buildPyramid(struct input &data, struct output &answer)
         if (fmod(answer.Np[s],2) == 0)
             answer.Np[s] -= 1;
 
-        cv:: Mat dst ;
+        cv:: Mat dst;
         cv::resize(data.f, dst, cv::Size((int) (answer.Np[s]), (int)(answer.Mp[s])) , 0, 0, cv::INTER_LINEAR);
         answer.fp[s] = dst;
     }
@@ -465,12 +455,12 @@ void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t p
     cv:: Mat u;
     int top = (int)floor(MK/2);
     int left = (int )floor(NK/2);
-    cv::copyMakeBorder(f, u,top, top, left, left, cv::BORDER_REPLICATE  );
+    cv::copyMakeBorder(f, u, top, top, left, left, cv::BORDER_REPLICATE);
 
     funcTimer.SetPoint();
 
     cv::Mat k = cv::Mat::ones(cv::Size((int)MK,(int)NK),CV_64F);
-    k = k/MK/NK;
+    k = k / MK / NK;
 
     funcTimer.SetPoint();
 
@@ -483,26 +473,25 @@ void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t p
     data.scaleMultiplier = params.kernelSizeMultiplier;
     data.largestLambda = params.maxLambda;
     data.f = f;
-    buildPyramid(data , answer);
+    buildPyramid(data, answer);
 
     funcTimer.SetPoint();
 
-    for (int i = answer.scales-1; i >=0; i--){
-        double Ms, Ns, MKs, NKs, lambda;
-        cv::Mat fs;
-        Ms = answer.Mp[i];
-        Ns = answer.Np[i];
+    for (int i = answer.scales-1; i >=0; i--)
+    {
+        double Ms = answer.Mp[i];
+        double Ns = answer.Np[i];
 
-        MKs = answer.MKp[i];
-        NKs = answer.NKp[i];
-        fs = answer.fp[i];
+        double MKs = answer.MKp[i];
+        double NKs = answer.NKp[i];
+        cv::Mat fs = answer.fp[i];
 
-        lambda = answer.lambdas[i];
+        double lambda = answer.lambdas[i];
 
         cv::resize(u, u, cv::Size((int) (Ns + NKs - 1), (int)(Ms + MKs - 1)) , 0, 0, cv::INTER_LINEAR);
         cv::resize(k, k, cv::Size((int) NKs, (int)MKs) , 0, 0, cv::INTER_LINEAR);
 
-        k = k/cv::sum(k)[0];
+        k = k / cv::sum(k)[0];
         blind_params.MK = MKs;
         blind_params.NK = NKs;
 
@@ -522,7 +511,7 @@ void coarseToFine(cv::Mat f, struct params_t blind_params, struct ctf_params_t p
  * Initialize parameters
  * Call coarseToFine
  *********************************************************************************************/
-void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_t &uk )
+void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_t &uk)
 {
     FuncTimer funcTimer("blind_deconv");
 
@@ -531,17 +520,15 @@ void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_
     cv:: Mat f3;
     int rpad = 0;
     int cpad = 0;
-    if(fmod(f.rows,2) == 0){
+    if (fmod(f.rows,2) == 0)
         rpad = 1;
-    }
-    if(fmod(f.cols,2) == 0){
+
+    if (fmod(f.cols,2) == 0)
         cpad = 1;
-    }
 
     funcTimer.SetPoint();
 
     f(cv::Range(0,f.rows-rpad),cv::Range(0,f.cols-cpad) ).copyTo(f3);
-
 
     funcTimer.SetPoint();
 
@@ -553,7 +540,6 @@ void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_
 
     funcTimer.SetPoint();
 
-
     coarseToFine(f3, params, ctf_params, uk);
 }
 
@@ -562,7 +548,7 @@ void blind_deconv(cv::Mat &f, double &lambda,struct params_t &params, struct uk_
  *Check the color channel.
  *
  ***********************************************/
-bool isGrayImage( cv::Mat img )
+bool isGrayImage(cv::Mat img)
 {
     FuncTimer funcTimer("isGrayImage");
 
@@ -584,7 +570,7 @@ bool isGrayImage( cv::Mat img )
  * Write out the results to the folder
  *
  ***********************************************/
-void helper(cv::Mat image )
+void helper(cv::Mat image)
 {
     FuncTimer funcTimer("helper");
 
@@ -637,7 +623,6 @@ int main(int argc, char* argv[])
     //cv::ocl::setUseOpenCL(useOCL);
     //std::cout << (cv::ocl::useOpenCL() ? "OpenCL is enabled" : "OpenCL not used") << std::endl;
 
-
     if(argc < 4)
     {
         printf("usage: deblur IMAGE_PATH LAMBDA KERNEL_SIZE");
@@ -654,7 +639,6 @@ int main(int argc, char* argv[])
 
     LAMBDA = atof(argv[2]);
     KERNEL_SIZE = atof(argv[3]);
-
 
     if(isGrayImage(image))
     {
